@@ -6,15 +6,35 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 
 	collection "github.com/jose78/go-collections"
-	"github.com/xwb1989/sqlparser"
+	"github.com/wind-c/cosqlparser/sqlparser"
 
 	_ "github.com/mattn/go-sqlite3" // Import go-sqlite3 library
 )
 
 func main() {
+
+	if len(os.Args) == 0 {
+		panic(fmt.Errorf("no args !!"))
+	}
+
+	alias := os.Args[1]
+	sqlSelect, errAlias := selectQuery(alias)
+	if errAlias != nil {
+		panic(errAlias)
+	}
+
+	selectEvaluated, err := evaluateQuery(sqlSelect)
+
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Print(selectEvaluated)
+
 	os.Remove("sqlite-database.db") // I delete the file to avoid duplicated records.
 	// SQLite is a file based database.
 
@@ -29,31 +49,39 @@ func main() {
 	sqliteDatabase, _ := sql.Open("sqlite3", "./sqlite-database.db") // Open the created SQLite File
 	defer sqliteDatabase.Close()                                     // Defer Closing the database
 	objRetrieved, _ := k8sGetElements(nil)
-	for table, value := range objRetrieved {
+	for table, values := range objRetrieved {
 		createTable(sqliteDatabase, table) // Create Database Tables
-		insert(sqliteDatabase, value, table)
+		insert(sqliteDatabase, values, table)
 	}
-
-	sqlSelect := `SELECT 
-    json_extract(p.data, '$.metadata.name') AS pod_name,
-    json_extract(d.data, '$.metadata.name') AS deploy_name
-FROM 
-    pod AS p
-JOIN 
-    deploy AS d ON json_extract(p.data, '$.metadata.labels.app') = json_extract(d.data, '$.metadata.name')
-;`
 
 	dataSelect_1, _ := evaluateSelect(sqliteDatabase, sqlSelect)
 	fmt.Println(dataSelect_1)
 	defer os.Remove("sqlite-database.db")
 }
 
-
 // Retrieve list of elements requered from sql
 func k8sGetElements(elements []string) (result map[string][]any, err error) {
+
+	bytes, err := os.ReadFile("./resources/k8s_objects.json")
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(bytes, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// removed unused componentes. This is temporal.
+	for key, _ := range result {
+		_, ok := result[key]
+		if !ok {
+			delete(result, key)
+		}
+	}
+
 	return
 }
-
 
 // Execute SElect
 func evaluateSelect(db *sql.DB, sqlSelect string) ([][]interface{}, error) {
@@ -93,7 +121,6 @@ func evaluateSelect(db *sql.DB, sqlSelect string) ([][]interface{}, error) {
 	}
 	return results, nil
 }
-
 
 // CReate table
 func createTable(db *sql.DB, table string) {
@@ -141,37 +168,51 @@ type sqlContainer struct {
 	sqlWhere  string
 }
 
-func evaluateQuery(query string) (sqlContainer, error) {
-	stmt, err := sqlparser.Parse(query)
-	if err != nil {
-		log.Fatalf("Error al parsear la consulta SQL: %v", err)
+func evaluateQuery(sqlStr string) (sqlContainer, error) {
+
+	var evaluateFrom func(map[string]any) []string
+	evaluateFrom = func(data map[string]any) []string {
+		result := []string{}
+		for _, value := range data {
+
+			if value != nil {
+				fmt.Println(value)
+				kind := reflect.TypeOf(value).Kind()
+
+				if kind == reflect.Map {
+					if item, ok := value.(map[string]any)["Expr"]; ok {
+						table := item.(map[string]any)["Name"].(string)
+						result = append(result, table)
+					} else if value != "Condition" {
+						result = append(result, evaluateFrom(value.(map[string]any))...)
+					}
+				}
+			}
+		}
+		return result
 	}
 
-	sql := sqlContainer{}
-	switch stmt := stmt.(type) {
-	case *sqlparser.Select:
-		cols := map[string]string{}
-		for _, col := range stmt.SelectExprs {
-			col := sqlparser.String(col)
-			var key string
-			var value string
-			if upperNameItemSelect := strings.ToUpper(col); strings.Contains(upperNameItemSelect, " AS ") {
-				key = strings.Split(upperNameItemSelect, " AS ")[0]
-				value = strings.Split(upperNameItemSelect, " AS ")[1]
-			} else {
-				colSplited := strings.Split(col, ".")
-				key = colSplited[len(colSplited)-1]
-				value = col
-			}
-			cols[key] = value
-			sql.sqlSelect = cols
-		}
-		sql.sqlFrom = strings.Split(sqlparser.String(stmt.From), ",")
-		sql.sqlWhere = strings.ReplaceAll(sqlparser.String(stmt.Where), " where ", "")
-	default:
-		return sqlContainer{}, fmt.Errorf("")
+	stmt, err := sqlparser.Parse(sqlStr)
+	if err != nil {
+		panic(err)
 	}
-	return sql, nil
+	bytes, _ := json.Marshal(stmt)
+	var data map[string]any
+	json.Unmarshal(bytes, &data)
+
+	result := []string{}
+
+	from := data["From"]
+
+	lstFrom := from.([]any)
+
+	for _, itemFrom := range lstFrom {
+		result = append(result, evaluateFrom(itemFrom.(map[string]any))...)
+	}
+
+	fmt.Print(result)
+
+	return sqlContainer{}, nil
 }
 
 func mapper(item string) any {
