@@ -162,23 +162,15 @@ func insert(db *sql.DB, elementToIterate []any, tbl string) {
 	}
 }
 
-type sqlContainer struct {
-	sqlSelect map[string]string
-	sqlFrom   []string
-	sqlWhere  string
-}
-
-func evaluateQuery(sqlStr string) (sqlContainer, error) {
+func evaluateQuery(sqlStr string) ([]string, error) {
 
 	var evaluateFrom func(map[string]any) []string
 	evaluateFrom = func(data map[string]any) []string {
 		result := []string{}
 		for _, value := range data {
-
 			if value != nil {
 				fmt.Println(value)
 				kind := reflect.TypeOf(value).Kind()
-
 				if kind == reflect.Map {
 					if item, ok := value.(map[string]any)["Expr"]; ok {
 						table := item.(map[string]any)["Name"].(string)
@@ -191,7 +183,6 @@ func evaluateQuery(sqlStr string) (sqlContainer, error) {
 		}
 		return result
 	}
-
 	stmt, err := sqlparser.Parse(sqlStr)
 	if err != nil {
 		panic(err)
@@ -201,18 +192,13 @@ func evaluateQuery(sqlStr string) (sqlContainer, error) {
 	json.Unmarshal(bytes, &data)
 
 	result := []string{}
-
 	from := data["From"]
-
 	lstFrom := from.([]any)
-
 	for _, itemFrom := range lstFrom {
 		result = append(result, evaluateFrom(itemFrom.(map[string]any))...)
 	}
 
-	fmt.Print(result)
-
-	return sqlContainer{}, nil
+	return result, nil
 }
 
 func mapper(item string) any {
